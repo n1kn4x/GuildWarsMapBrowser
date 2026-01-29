@@ -6,6 +6,7 @@
 #include "FFNA_MapFile.h"
 #include <algorithm>
 #include <commdlg.h>
+#include <cmath>
 #include <filesystem>
 #include <sstream>
 
@@ -15,6 +16,9 @@ extern int selected_map_file_index;
 
 namespace {
     constexpr float kSpellcastingRadius = 1085.0f;
+    constexpr float kRouteHeightOffset = 35.0f;
+    constexpr int kCircleSegments = 48;
+    constexpr float kPi = 3.14159265358979323846f;
 
     std::wstring OpenSaveFileDialog(const std::wstring& default_name, const std::wstring& extension) {
         OPENFILENAMEW ofn;
@@ -225,6 +229,85 @@ namespace {
         }
         return best_index;
     }
+
+    void RemoveMeshList(MapRenderer* map_renderer, std::vector<int>& mesh_ids) {
+        if (!map_renderer) {
+            return;
+        }
+        auto* mesh_manager = map_renderer->GetMeshManager();
+        if (!mesh_manager) {
+            return;
+        }
+        for (int mesh_id : mesh_ids) {
+            mesh_manager->RemoveMesh(mesh_id);
+        }
+        mesh_ids.clear();
+    }
+
+    void UpdateRouteOverlayMeshes(MapRenderer* map_renderer,
+                                  const std::vector<RouteWaypoint>& waypoints,
+                                  bool show_lines,
+                                  bool show_coverage,
+                                  std::vector<int>& route_line_mesh_ids,
+                                  std::vector<int>& coverage_mesh_ids) {
+        auto* mesh_manager = map_renderer ? map_renderer->GetMeshManager() : nullptr;
+        auto* terrain = map_renderer ? map_renderer->GetTerrain() : nullptr;
+        if (!mesh_manager || !terrain || waypoints.empty()) {
+            RemoveMeshList(map_renderer, route_line_mesh_ids);
+            RemoveMeshList(map_renderer, coverage_mesh_ids);
+            return;
+        }
+
+        RemoveMeshList(map_renderer, route_line_mesh_ids);
+        RemoveMeshList(map_renderer, coverage_mesh_ids);
+
+        const DirectX::XMFLOAT4 route_color(0.0f, 0.85f, 1.0f, 0.95f);
+        const DirectX::XMFLOAT4 coverage_color(1.0f, 0.65f, 0.15f, 0.7f);
+
+        if (show_lines && waypoints.size() > 1) {
+            for (size_t i = 1; i < waypoints.size(); ++i) {
+                const auto& start = waypoints[i - 1];
+                const auto& end = waypoints[i];
+                const float start_height = terrain->get_height_at(start.x, start.y) + kRouteHeightOffset;
+                const float end_height = terrain->get_height_at(end.x, end.y) + kRouteHeightOffset;
+                DirectX::XMFLOAT3 start_pos(start.x, start_height, start.y);
+                DirectX::XMFLOAT3 end_pos(end.x, end_height, end.y);
+
+                int line_id = mesh_manager->AddLine(start_pos, end_pos, PixelShaderType::OldModel);
+                if (line_id >= 0) {
+                    mesh_manager->SetMeshColor(line_id, route_color);
+                    route_line_mesh_ids.push_back(line_id);
+                }
+            }
+        }
+
+        if (show_coverage) {
+            const float angle_step = (2.0f * kPi) / static_cast<float>(kCircleSegments);
+            for (const auto& waypoint : waypoints) {
+                float prev_x = waypoint.x + kSpellcastingRadius;
+                float prev_y = waypoint.y;
+                for (int seg = 1; seg <= kCircleSegments; ++seg) {
+                    const float angle = angle_step * static_cast<float>(seg);
+                    const float next_x = waypoint.x + kSpellcastingRadius * std::cos(angle);
+                    const float next_y = waypoint.y + kSpellcastingRadius * std::sin(angle);
+
+                    const float prev_height = terrain->get_height_at(prev_x, prev_y) + kRouteHeightOffset;
+                    const float next_height = terrain->get_height_at(next_x, next_y) + kRouteHeightOffset;
+                    DirectX::XMFLOAT3 start_pos(prev_x, prev_height, prev_y);
+                    DirectX::XMFLOAT3 end_pos(next_x, next_height, next_y);
+
+                    int line_id = mesh_manager->AddLine(start_pos, end_pos, PixelShaderType::OldModel);
+                    if (line_id >= 0) {
+                        mesh_manager->SetMeshColor(line_id, coverage_color);
+                        coverage_mesh_ids.push_back(line_id);
+                    }
+
+                    prev_x = next_x;
+                    prev_y = next_y;
+                }
+            }
+        }
+    }
 }
 
 void draw_route_planner_panel(MapRenderer* map_renderer) {
@@ -246,6 +329,12 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
     static int selected_waypoint = -1;
     static bool is_dragging_waypoint = false;
     static int dragging_waypoint_index = -1;
+    static std::vector<int> route_line_mesh_ids;
+    static std::vector<int> coverage_mesh_ids;
+    static std::vector<RouteWaypoint> last_overlay_waypoints;
+    static bool last_overlay_show_lines = false;
+    static bool last_overlay_show_coverage = false;
+    static int last_overlay_map_index = -1;
 
     ImGuiIO& io = ImGui::GetIO();
     const bool prev_move_title_only = io.ConfigWindowsMoveFromTitleBarOnly;
@@ -258,6 +347,8 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
         if (selected_file_type != FFNA_Type3) {
             ImGui::TextWrapped("No pathfinding data loaded.");
             ImGui::TextWrapped("Load a map file (FFNA Type3) from the DAT browser to plan routes.");
+            RemoveMeshList(map_renderer, route_line_mesh_ids);
+            RemoveMeshList(map_renderer, coverage_mesh_ids);
             ImGui::End();
             return;
         }
@@ -427,6 +518,22 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
                     selected_waypoint = static_cast<int>(waypoints.size()) - 1;
                 }
             }
+        }
+
+        if (selected_map_file_index != last_overlay_map_index ||
+            show_lines != last_overlay_show_lines ||
+            show_coverage != last_overlay_show_coverage ||
+            waypoints.size() != last_overlay_waypoints.size() ||
+            !std::equal(waypoints.begin(), waypoints.end(), last_overlay_waypoints.begin(),
+                        [](const RouteWaypoint& a, const RouteWaypoint& b) {
+                            return a.x == b.x && a.y == b.y;
+                        })) {
+            UpdateRouteOverlayMeshes(map_renderer, waypoints, show_lines, show_coverage,
+                                     route_line_mesh_ids, coverage_mesh_ids);
+            last_overlay_waypoints = waypoints;
+            last_overlay_show_lines = show_lines;
+            last_overlay_show_coverage = show_coverage;
+            last_overlay_map_index = selected_map_file_index;
         }
     }
     ImGui::End();
