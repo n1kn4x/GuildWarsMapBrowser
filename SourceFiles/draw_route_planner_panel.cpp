@@ -40,7 +40,8 @@ namespace {
     }
 
     bool WriteCsv(const std::wstring& save_path, const std::vector<RouteWaypoint>& waypoints) {
-        std::ofstream file(std::filesystem::path(save_path));
+        std::ofstream file;
+        file.open(std::filesystem::path(save_path));
         if (!file.is_open()) {
             return false;
         }
