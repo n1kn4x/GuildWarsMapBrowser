@@ -15,7 +15,6 @@ extern int selected_map_file_index;
 
 namespace {
     constexpr float kAggroRadius = 1500.0f;
-    constexpr float kCoverageSpacingFactor = 0.5f; // 50% overlap so coverage matches the full bubble
 
     std::wstring OpenSaveFileDialog(const std::wstring& default_name, const std::wstring& extension) {
         OPENFILENAMEW ofn;
@@ -163,33 +162,8 @@ namespace {
         const float px_per_world_x = image_size.x / span_x;
         const float px_per_world_y = image_size.y / span_y;
         const float aggro_radius_px = kAggroRadius * std::min(px_per_world_x, px_per_world_y);
-        const float coverage_radius_px = aggro_radius_px * kCoverageSpacingFactor;
 
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
-        if (show_coverage && waypoints.size() > 1) {
-            const float coverage_spacing = kAggroRadius * kCoverageSpacingFactor;
-            if (coverage_spacing > 0.0f) {
-                for (size_t i = 1; i < waypoints.size(); ++i) {
-                    const float dx = waypoints[i].x - waypoints[i - 1].x;
-                    const float dy = waypoints[i].y - waypoints[i - 1].y;
-                    const float length = std::sqrt(dx * dx + dy * dy);
-                    if (length <= coverage_spacing) {
-                        continue;
-                    }
-                    const int steps = static_cast<int>(length / coverage_spacing);
-                    for (int step = 1; step < steps; ++step) {
-                        const float t = (coverage_spacing * static_cast<float>(step)) / length;
-                        const float sample_x = waypoints[i - 1].x + dx * t;
-                        const float sample_y = waypoints[i - 1].y + dy * t;
-                        const float px = (sample_x - visualizer.GetMinX()) * px_per_world_x;
-                        const float py = (visualizer.GetMaxY() - sample_y) * px_per_world_y;
-                        const ImVec2 center = ImVec2(image_min.x + px, image_min.y + py);
-                        draw_list->AddCircle(center, aggro_radius_px, IM_COL32(255, 180, 0, 120), 40, 2.0f);
-                        draw_list->AddCircleFilled(center, coverage_radius_px, IM_COL32(255, 140, 0, 40), 40);
-                    }
-                }
-            }
-        }
 
         for (size_t i = 0; i < waypoints.size(); ++i) {
             const float px = (waypoints[i].x - visualizer.GetMinX()) * px_per_world_x;
@@ -198,7 +172,6 @@ namespace {
 
             if (show_coverage) {
                 draw_list->AddCircle(center, aggro_radius_px, IM_COL32(255, 180, 0, 120), 40, 2.0f);
-                draw_list->AddCircleFilled(center, coverage_radius_px, IM_COL32(255, 140, 0, 40), 40);
             }
 
             const bool is_selected = static_cast<int>(i) == selected_index;
@@ -272,6 +245,10 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
     static int selected_waypoint = -1;
     static bool is_dragging_waypoint = false;
     static int dragging_waypoint_index = -1;
+
+    ImGuiIO& io = ImGui::GetIO();
+    const bool prev_move_title_only = io.ConfigWindowsMoveFromTitleBarOnly;
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
 
     if (ImGui::Begin("Route Planner", &GuiGlobalConstants::is_route_planner_panel_open, ImGuiWindowFlags_NoFocusOnAppearing)) {
         GuiGlobalConstants::ClampWindowToScreen();
@@ -439,4 +416,5 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
         }
     }
     ImGui::End();
+    io.ConfigWindowsMoveFromTitleBarOnly = prev_move_title_only;
 }
