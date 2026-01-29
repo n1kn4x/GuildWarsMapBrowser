@@ -273,6 +273,7 @@
     <ClInclude Include="SourceFiles\draw_terrain_chunk.h" />
     <ClInclude Include="SourceFiles\draw_texture_panel.h" />
     <ClInclude Include="SourceFiles\draw_pathfinding_panel.h" />
+    <ClInclude Include="SourceFiles\draw_route_planner_panel.h" />
     <ClInclude Include="SourceFiles\draw_text_panel.h" />
     <ClInclude Include="SourceFiles\draw_ui.h" />
     <ClInclude Include="SourceFiles\DXMathHelpers.h" />
@@ -447,6 +448,7 @@
     <ClCompile Include="SourceFiles\draw_terrain_chunk.cpp" />
     <ClCompile Include="SourceFiles\draw_texture_panel.cpp" />
     <ClCompile Include="SourceFiles\draw_pathfinding_panel.cpp" />
+    <ClCompile Include="SourceFiles\draw_route_planner_panel.cpp" />
     <ClCompile Include="SourceFiles\draw_text_panel.cpp" />
     <ClCompile Include="SourceFiles\draw_ui.cpp" />
     <ClCompile Include="SourceFiles\DXMathHelpers.cpp" />

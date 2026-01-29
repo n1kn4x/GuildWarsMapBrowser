@@ -186,6 +186,13 @@ void PathfindingVisualizer::GenerateImage(const PathfindingChunk& pathfinding_ch
     float scale_x = static_cast<float>(m_width - 1) / width;
     float scale_y = static_cast<float>(m_height - 1) / height;
 
+    m_min_x = min_x;
+    m_max_x = max_x;
+    m_min_y = min_y;
+    m_max_y = max_y;
+    m_scale_x = scale_x;
+    m_scale_y = scale_y;
+
     // Draw each trapezoid with golden ratio coloring
     const float golden_ratio = 0.618033988749895f;
     for (size_t idx = 0; idx < pathfinding_chunk.all_trapezoids.size(); ++idx) {
@@ -226,6 +233,12 @@ void PathfindingVisualizer::Clear() {
     m_image_ready = false;
     m_trapezoid_count = 0;
     m_plane_count = 0;
+    m_min_x = 0.0f;
+    m_min_y = 0.0f;
+    m_max_x = 0.0f;
+    m_max_y = 0.0f;
+    m_scale_x = 1.0f;
+    m_scale_y = 1.0f;
     // Note: texture_id is not cleared here - call RemoveTexture separately if needed
 }
 
@@ -353,4 +366,8 @@ void draw_pathfinding_panel(MapRenderer* map_renderer) {
         }
     }
     ImGui::End();
+}
+
+PathfindingVisualizer* GetPathfindingVisualizer() {
+    return &s_pathfinding_visualizer;
 }
