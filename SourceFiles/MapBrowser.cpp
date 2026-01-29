@@ -493,8 +493,9 @@ void MapBrowser::Render()
         ShowErrorMessage();
     }
     else {
-        draw_ui(m_dat_managers, m_dat_manager_to_show_in_dat_browser, m_map_renderer.get(), picking_info, m_csv_data, m_FPS_target, m_timer, m_extract_panel_info,
-            msaa_changed, msaa_level_index, msaa_levels, m_hash_index);
+        draw_ui(m_dat_managers, m_dat_manager_to_show_in_dat_browser, m_map_renderer.get(), m_deviceResources.get(),
+            picking_info, m_csv_data, m_FPS_target, m_timer, m_extract_panel_info, msaa_changed, msaa_level_index,
+            msaa_levels, m_hash_index);
 
         // --- Draw extraction progress UI *inside* the ImGui frame ---
         // Check if either extraction queue is active

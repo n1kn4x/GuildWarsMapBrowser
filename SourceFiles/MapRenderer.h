@@ -204,6 +204,8 @@ public:
     }
 
     Camera* GetCamera() { return m_user_camera.get(); }
+    ID3D11Device* GetDevice() const { return m_device; }
+    ID3D11DeviceContext* GetDeviceContext() const { return m_deviceContext; }
 
     // Camera override for model viewer mode
     void SetCameraOverride(const DirectX::XMMATRIX& view, const DirectX::XMMATRIX& proj, const DirectX::XMFLOAT3& pos)
