@@ -24,6 +24,14 @@ public:
     // Check if visualization is ready
     bool IsReady() const { return m_image_ready; }
 
+    // Coordinate transform helpers
+    float GetMinX() const { return m_min_x; }
+    float GetMinY() const { return m_min_y; }
+    float GetMaxX() const { return m_max_x; }
+    float GetMaxY() const { return m_max_y; }
+    float GetScaleX() const { return m_scale_x; }
+    float GetScaleY() const { return m_scale_y; }
+
     // Get raw RGBA data for export
     const std::vector<RGBA>& GetImageData() const { return m_image_data; }
 
@@ -42,6 +50,12 @@ private:
     bool m_image_ready = false;
     size_t m_trapezoid_count = 0;
     size_t m_plane_count = 0;
+    float m_min_x = 0.0f;
+    float m_min_y = 0.0f;
+    float m_max_x = 0.0f;
+    float m_max_y = 0.0f;
+    float m_scale_x = 1.0f;
+    float m_scale_y = 1.0f;
 
     // HSV to RGB conversion for coloring trapezoids
     RGBA HsvToRgb(float h, float s, float v, uint8_t a = 255);
@@ -60,3 +74,6 @@ private:
 
 // Draw the pathfinding visualization panel
 void draw_pathfinding_panel(MapRenderer* map_renderer);
+
+// Expose visualization for other panels (route planner, etc.)
+PathfindingVisualizer* GetPathfindingVisualizer();
