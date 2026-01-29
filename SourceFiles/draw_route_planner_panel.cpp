@@ -1,12 +1,14 @@
 #include "pch.h"
 #include "draw_route_planner_panel.h"
 
+#include "DeviceResources.h"
 #include "GuiGlobalConstants.h"
 #include "draw_pathfinding_panel.h"
 #include "FFNA_MapFile.h"
 #include <algorithm>
 #include <commdlg.h>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <sstream>
 
@@ -19,6 +21,197 @@ namespace {
     constexpr float kRouteHeightOffset = 35.0f;
     constexpr int kCircleSegments = 48;
     constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTopDownCameraHeight = 80000.0f;
+    constexpr float kTopDownNearZ = 100.0f;
+    constexpr float kTopDownFarZ = 200000.0f;
+    constexpr int kRouteMapImageSize = 1024;
+
+    struct CameraStateSnapshot {
+        CameraType camera_type;
+        DirectX::XMFLOAT3 position;
+        float pitch;
+        float yaw;
+        float fov;
+        float view_width;
+        float view_height;
+        float near_z;
+        float far_z;
+    };
+
+    CameraStateSnapshot CaptureCameraState(const Camera* camera) {
+        CameraStateSnapshot snapshot{};
+        snapshot.camera_type = camera->GetCameraType();
+        snapshot.position = camera->GetPosition3f();
+        snapshot.pitch = camera->GetPitch();
+        snapshot.yaw = camera->GetYaw();
+        snapshot.fov = camera->GetFovY();
+        snapshot.view_width = camera->GetViewWidth();
+        snapshot.view_height = camera->GetViewHeight();
+        snapshot.near_z = camera->GetNearZ();
+        snapshot.far_z = camera->GetFarZ();
+        return snapshot;
+    }
+
+    void RestoreCameraState(MapRenderer* map_renderer, Camera* camera, const CameraStateSnapshot& snapshot) {
+        if (snapshot.camera_type == CameraType::Orthographic) {
+            map_renderer->SetFrustumAsOrthographic(snapshot.view_width, snapshot.view_height, snapshot.near_z,
+                                                   snapshot.far_z);
+        } else {
+            const float aspect_ratio = camera->GetAspectRatio();
+            map_renderer->SetFrustumAsPerspective(snapshot.fov, aspect_ratio, snapshot.near_z, snapshot.far_z);
+        }
+        camera->SetPosition(snapshot.position.x, snapshot.position.y, snapshot.position.z);
+        camera->SetOrientation(snapshot.pitch, snapshot.yaw);
+        map_renderer->Update(0.0f);
+    }
+
+    bool CaptureTextureToRgba(MapRenderer* map_renderer,
+                              ID3D11Texture2D* texture,
+                              std::vector<RGBA>& out_data,
+                              int& out_width,
+                              int& out_height) {
+        if (!map_renderer || !texture) {
+            return false;
+        }
+
+        DirectX::ScratchImage captured;
+        HRESULT hr = DirectX::CaptureTexture(map_renderer->GetDevice(),
+                                             map_renderer->GetDeviceContext(),
+                                             texture, captured);
+        if (FAILED(hr)) {
+            return false;
+        }
+
+        const DirectX::Image* image = captured.GetImage(0, 0, 0);
+        if (!image) {
+            return false;
+        }
+
+        DirectX::ScratchImage converted;
+        const DirectX::Image* final_image = image;
+        if (image->format != DXGI_FORMAT_B8G8R8A8_UNORM) {
+            HRESULT hr_convert = DirectX::Convert(*image, DXGI_FORMAT_B8G8R8A8_UNORM, DirectX::TEX_FILTER_DEFAULT,
+                                                  DirectX::TEX_THRESHOLD_DEFAULT, converted);
+            if (FAILED(hr_convert)) {
+                return false;
+            }
+            final_image = converted.GetImage(0, 0, 0);
+            if (!final_image) {
+                return false;
+            }
+        }
+
+        out_width = static_cast<int>(final_image->width);
+        out_height = static_cast<int>(final_image->height);
+        out_data.resize(static_cast<size_t>(out_width * out_height));
+        std::memcpy(out_data.data(), final_image->pixels, out_data.size() * sizeof(RGBA));
+        return true;
+    }
+
+    bool UpdateRoutePlannerMapTexture(MapRenderer* map_renderer,
+                                      DX::DeviceResources* device_resources,
+                                      PathfindingVisualizer& visualizer,
+                                      int& route_map_texture_id) {
+        if (!map_renderer || !device_resources) {
+            return false;
+        }
+        auto* terrain = map_renderer->GetTerrain();
+        if (!terrain) {
+            return false;
+        }
+
+        if (!visualizer.IsMaskReady()) {
+            if (selected_ffna_map_file.pathfinding_chunk.valid) {
+                visualizer.GenerateMask(selected_ffna_map_file.pathfinding_chunk, kRouteMapImageSize);
+            }
+        }
+
+        if (!visualizer.IsMaskReady()) {
+            return false;
+        }
+
+        const int mask_width = visualizer.GetMaskWidth();
+        const int mask_height = visualizer.GetMaskHeight();
+        if (mask_width <= 0 || mask_height <= 0) {
+            return false;
+        }
+
+        const float aspect_ratio = static_cast<float>(mask_width) / static_cast<float>(mask_height);
+        device_resources->UpdateOffscreenResources(mask_width, mask_height, aspect_ratio, true);
+
+        Camera* camera = map_renderer->GetCamera();
+        const CameraStateSnapshot camera_snapshot = CaptureCameraState(camera);
+
+        const bool prev_should_render_sky = map_renderer->GetShouldRenderSky();
+        const bool prev_should_render_fog = map_renderer->GetShouldRenderFog();
+        const bool prev_should_render_shadows = map_renderer->GetShouldRenderShadows();
+        const bool prev_should_render_model_shadows = map_renderer->GetShouldRenderShadowsForModels();
+
+        map_renderer->SetShouldRenderSky(false);
+        map_renderer->SetShouldRenderFog(false);
+        map_renderer->SetShouldRenderShadows(false);
+        map_renderer->SetShouldRenderShadowsForModels(false);
+
+        const float view_width = visualizer.GetMaxX() - visualizer.GetMinX();
+        const float view_height = visualizer.GetMaxY() - visualizer.GetMinY();
+        const float center_x = (visualizer.GetMinX() + visualizer.GetMaxX()) * 0.5f;
+        const float center_z = (visualizer.GetMinY() + visualizer.GetMaxY()) * 0.5f;
+
+        map_renderer->SetFrustumAsOrthographic(view_width, view_height, kTopDownNearZ, kTopDownFarZ);
+        camera->SetOrientation(-90.0f * XM_PI / 180.0f, 0.0f);
+        camera->SetPosition(center_x, kTopDownCameraHeight, center_z);
+        map_renderer->Update(0.0f);
+
+        auto* context = device_resources->GetD3DDeviceContext();
+        auto* render_target = device_resources->GetOffscreenRenderTargetView();
+        auto* depth_stencil = device_resources->GetOffscreenDepthStencilView();
+
+        const auto& clear_color = map_renderer->GetClearColor();
+        context->ClearRenderTargetView(render_target, (float*)(&clear_color));
+        context->ClearDepthStencilView(depth_stencil, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+
+        context->OMSetRenderTargets(1, &render_target, depth_stencil);
+        auto const viewport = device_resources->GetOffscreenViewport();
+        context->RSSetViewports(1, &viewport);
+
+        map_renderer->Render(render_target, nullptr, depth_stencil);
+        context->Flush();
+
+        std::vector<RGBA> map_rgba;
+        int map_width = 0;
+        int map_height = 0;
+        ID3D11Texture2D* offscreen_texture = device_resources->GetOffscreenRenderTarget();
+        const bool capture_ok = CaptureTextureToRgba(map_renderer, offscreen_texture, map_rgba, map_width, map_height);
+
+        map_renderer->SetShouldRenderSky(prev_should_render_sky);
+        map_renderer->SetShouldRenderFog(prev_should_render_fog);
+        map_renderer->SetShouldRenderShadows(prev_should_render_shadows);
+        map_renderer->SetShouldRenderShadowsForModels(prev_should_render_model_shadows);
+        RestoreCameraState(map_renderer, camera, camera_snapshot);
+
+        if (!capture_ok || map_width != mask_width || map_height != mask_height) {
+            return false;
+        }
+
+        const auto& mask_data = visualizer.GetMaskData();
+        if (mask_data.size() != map_rgba.size()) {
+            return false;
+        }
+
+        for (size_t i = 0; i < map_rgba.size(); ++i) {
+            map_rgba[i].a = mask_data[i].a;
+        }
+
+        auto* texture_manager = map_renderer->GetTextureManager();
+        if (route_map_texture_id >= 0) {
+            texture_manager->RemoveTexture(route_map_texture_id);
+            route_map_texture_id = -1;
+        }
+
+        HRESULT hr = texture_manager->CreateTextureFromRGBA(mask_width, mask_height, map_rgba.data(),
+                                                            &route_map_texture_id, -1);
+        return SUCCEEDED(hr) && route_map_texture_id >= 0;
+    }
 
     std::wstring OpenSaveFileDialog(const std::wstring& default_name, const std::wstring& extension) {
         OPENFILENAMEW ofn;
@@ -310,7 +503,7 @@ namespace {
     }
 }
 
-void draw_route_planner_panel(MapRenderer* map_renderer) {
+void draw_route_planner_panel(MapRenderer* map_renderer, DX::DeviceResources* device_resources) {
     if (!GuiGlobalConstants::is_route_planner_panel_open) {
         return;
     }
@@ -329,6 +522,9 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
     static int selected_waypoint = -1;
     static bool is_dragging_waypoint = false;
     static int dragging_waypoint_index = -1;
+    static int route_map_texture_id = -1;
+    static int route_map_map_index = -1;
+    static int route_mask_map_index = -1;
     static std::vector<int> route_line_mesh_ids;
     static std::vector<int> coverage_mesh_ids;
     static std::vector<RouteWaypoint> last_overlay_waypoints;
@@ -354,10 +550,10 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
         }
 
         auto* visualizer = GetPathfindingVisualizer();
-        if (!visualizer->IsReady()) {
+        if (route_mask_map_index != selected_map_file_index || !visualizer->IsMaskReady()) {
             if (selected_ffna_map_file.pathfinding_chunk.valid) {
-                visualizer->GenerateImage(selected_ffna_map_file.pathfinding_chunk, 1024);
-                visualizer->CreateTexture(map_renderer->GetTextureManager());
+                visualizer->GenerateMask(selected_ffna_map_file.pathfinding_chunk, kRouteMapImageSize);
+                route_mask_map_index = selected_map_file_index;
             }
         }
 
@@ -381,13 +577,23 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
         ImGui::TextWrapped("Clicks report map world coordinates (X/Y) based on the pathfinding data.");
         ImGui::Separator();
 
-        int tex_id = visualizer->GetTextureId();
-        if (tex_id >= 0 && visualizer->IsReady()) {
-            ID3D11ShaderResourceView* texture = map_renderer->GetTextureManager()->GetTexture(tex_id);
+        if (route_map_map_index != selected_map_file_index && route_map_texture_id >= 0) {
+            map_renderer->GetTextureManager()->RemoveTexture(route_map_texture_id);
+            route_map_texture_id = -1;
+        }
+
+        if (route_map_texture_id < 0 || route_map_map_index != selected_map_file_index) {
+            if (UpdateRoutePlannerMapTexture(map_renderer, device_resources, *visualizer, route_map_texture_id)) {
+                route_map_map_index = selected_map_file_index;
+            }
+        }
+
+        if (route_map_texture_id >= 0 && visualizer->IsMaskReady()) {
+            ID3D11ShaderResourceView* texture = map_renderer->GetTextureManager()->GetTexture(route_map_texture_id);
             if (texture) {
                 ImVec2 window_size = ImGui::GetContentRegionAvail();
-                float img_width = static_cast<float>(visualizer->GetWidth());
-                float img_height = static_cast<float>(visualizer->GetHeight());
+                float img_width = static_cast<float>(visualizer->GetMaskWidth());
+                float img_height = static_cast<float>(visualizer->GetMaskHeight());
 
                 float scale_x = (window_size.x - 20) / img_width;
                 float scale_y = (window_size.y - 120) / img_height;
@@ -398,7 +604,6 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
                 ImVec2 scaled_size(img_width * scale, img_height * scale);
                 ImVec2 image_min = ImGui::GetCursorScreenPos();
                 ImGui::Image((ImTextureID)texture, scaled_size);
-                ImVec2 image_max = ImVec2(image_min.x + scaled_size.x, image_min.y + scaled_size.y);
 
                 DrawWaypointOverlay(waypoints, *visualizer, image_min, scaled_size, show_lines, show_coverage, selected_waypoint);
 
@@ -451,7 +656,7 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
                 }
             }
         } else {
-            ImGui::Text("Generating visualization...");
+            ImGui::Text("Generating route map...");
         }
 
         ImGui::Separator();

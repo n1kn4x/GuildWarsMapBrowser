@@ -9,4 +9,4 @@ struct RouteWaypoint {
     float y = 0.0f;
 };
 
-void draw_route_planner_panel(MapRenderer* map_renderer);
+void draw_route_planner_panel(MapRenderer* map_renderer, DX::DeviceResources* device_resources);

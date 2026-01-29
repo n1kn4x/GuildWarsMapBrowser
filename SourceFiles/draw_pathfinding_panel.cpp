@@ -208,6 +208,158 @@ void PathfindingVisualizer::GenerateImage(const PathfindingChunk& pathfinding_ch
     m_image_ready = true;
 }
 
+void PathfindingVisualizer::GenerateMask(const PathfindingChunk& pathfinding_chunk, int image_size) {
+    m_mask_data.clear();
+    m_mask_width = 0;
+    m_mask_height = 0;
+    m_mask_ready = false;
+
+    if (!pathfinding_chunk.valid || pathfinding_chunk.all_trapezoids.empty()) {
+        return;
+    }
+
+    // Find bounds of all trapezoids
+    float min_x = FLT_MAX, max_x = -FLT_MAX;
+    float min_y = FLT_MAX, max_y = -FLT_MAX;
+
+    for (const auto& trap : pathfinding_chunk.all_trapezoids) {
+        min_x = std::min({min_x, trap.xtl, trap.xtr, trap.xbl, trap.xbr});
+        max_x = std::max({max_x, trap.xtl, trap.xtr, trap.xbl, trap.xbr});
+        min_y = std::min({min_y, trap.yt, trap.yb});
+        max_y = std::max({max_y, trap.yt, trap.yb});
+    }
+
+    // Add padding
+    float padding = 0.05f;
+    float width = max_x - min_x;
+    float height = max_y - min_y;
+
+    if (width <= 0 || height <= 0) return;
+
+    min_x -= width * padding;
+    max_x += width * padding;
+    min_y -= height * padding;
+    max_y += height * padding;
+
+    width = max_x - min_x;
+    height = max_y - min_y;
+
+    // Calculate image dimensions maintaining aspect ratio
+    float scale = std::min(static_cast<float>(image_size) / width,
+                          static_cast<float>(image_size) / height);
+    m_mask_width = static_cast<int>(width * scale);
+    m_mask_height = static_cast<int>(height * scale);
+
+    if (m_mask_width <= 0 || m_mask_height <= 0) return;
+
+    // Initialize mask with transparent background
+    m_mask_data.resize(m_mask_width * m_mask_height);
+    RGBA bg_color = {0, 0, 0, 0};  // Transparent background (BGRA)
+    std::fill(m_mask_data.begin(), m_mask_data.end(), bg_color);
+
+    // Calculate scale factors for coordinate transformation
+    float scale_x = static_cast<float>(m_mask_width - 1) / width;
+    float scale_y = static_cast<float>(m_mask_height - 1) / height;
+
+    // Update bounds for coordinate transforms
+    m_min_x = min_x;
+    m_max_x = max_x;
+    m_min_y = min_y;
+    m_max_y = max_y;
+    m_scale_x = scale_x;
+    m_scale_y = scale_y;
+
+    auto draw_line = [&](int x0, int y0, int x1, int y1, RGBA color) {
+        int dx = abs(x1 - x0);
+        int dy = abs(y1 - y0);
+        int sx = x0 < x1 ? 1 : -1;
+        int sy = y0 < y1 ? 1 : -1;
+        int err = dx - dy;
+
+        while (true) {
+            if (x0 >= 0 && x0 < m_mask_width && y0 >= 0 && y0 < m_mask_height) {
+                m_mask_data[y0 * m_mask_width + x0] = color;
+            }
+
+            if (x0 == x1 && y0 == y1) break;
+            int e2 = 2 * err;
+            if (e2 > -dy) { err -= dy; x0 += sx; }
+            if (e2 < dx) { err += dx; y0 += sy; }
+        }
+    };
+
+    auto fill_polygon = [&](const std::vector<std::pair<int, int>>& points, RGBA color) {
+        if (points.size() < 3) return;
+
+        int min_y = INT_MAX, max_y = INT_MIN;
+        for (const auto& p : points) {
+            min_y = std::min(min_y, p.second);
+            max_y = std::max(max_y, p.second);
+        }
+
+        min_y = std::max(0, min_y);
+        max_y = std::min(m_mask_height - 1, max_y);
+
+        for (int y = min_y; y <= max_y; ++y) {
+            std::vector<int> intersections;
+
+            for (size_t i = 0; i < points.size(); ++i) {
+                size_t j = (i + 1) % points.size();
+                int y0 = points[i].second;
+                int y1 = points[j].second;
+                int x0 = points[i].first;
+                int x1 = points[j].first;
+
+                if ((y0 <= y && y1 > y) || (y1 <= y && y0 > y)) {
+                    float t = static_cast<float>(y - y0) / static_cast<float>(y1 - y0);
+                    int x = static_cast<int>(x0 + t * (x1 - x0));
+                    intersections.push_back(x);
+                }
+            }
+
+            std::sort(intersections.begin(), intersections.end());
+
+            for (size_t i = 0; i + 1 < intersections.size(); i += 2) {
+                int x_start = std::max(0, intersections[i]);
+                int x_end = std::min(m_mask_width - 1, intersections[i + 1]);
+                for (int x = x_start; x <= x_end; ++x) {
+                    m_mask_data[y * m_mask_width + x] = color;
+                }
+            }
+        }
+    };
+
+    auto draw_trapezoid = [&](const PathfindingTrapezoid& trap, RGBA fill_color, RGBA outline_color) {
+        auto transform = [&](float x, float y) -> std::pair<int, int> {
+            int px = static_cast<int>((x - min_x) * scale_x);
+            int py = m_mask_height - 1 - static_cast<int>((y - min_y) * scale_y);
+            return {px, py};
+        };
+
+        auto bl = transform(trap.xbl, trap.yb);
+        auto br = transform(trap.xbr, trap.yb);
+        auto tr = transform(trap.xtr, trap.yt);
+        auto tl = transform(trap.xtl, trap.yt);
+
+        std::vector<std::pair<int, int>> corners = {bl, br, tr, tl};
+        fill_polygon(corners, fill_color);
+
+        draw_line(bl.first, bl.second, br.first, br.second, outline_color);
+        draw_line(br.first, br.second, tr.first, tr.second, outline_color);
+        draw_line(tr.first, tr.second, tl.first, tl.second, outline_color);
+        draw_line(tl.first, tl.second, bl.first, bl.second, outline_color);
+    };
+
+    const RGBA fill_color = {255, 255, 255, 255};
+    const RGBA outline_color = {255, 255, 255, 255};
+
+    for (const auto& trap : pathfinding_chunk.all_trapezoids) {
+        draw_trapezoid(trap, fill_color, outline_color);
+    }
+
+    m_mask_ready = true;
+}
+
 int PathfindingVisualizer::CreateTexture(TextureManager* texture_manager) {
     if (!m_image_ready || m_image_data.empty()) {
         return -1;
@@ -226,6 +378,22 @@ int PathfindingVisualizer::CreateTexture(TextureManager* texture_manager) {
     return SUCCEEDED(hr) ? m_texture_id : -1;
 }
 
+int PathfindingVisualizer::CreateMaskTexture(TextureManager* texture_manager) {
+    if (!m_mask_ready || m_mask_data.empty()) {
+        return -1;
+    }
+
+    if (m_mask_texture_id >= 0) {
+        texture_manager->RemoveTexture(m_mask_texture_id);
+        m_mask_texture_id = -1;
+    }
+
+    HRESULT hr = texture_manager->CreateTextureFromRGBA(
+        m_mask_width, m_mask_height, m_mask_data.data(), &m_mask_texture_id, -1);
+
+    return SUCCEEDED(hr) ? m_mask_texture_id : -1;
+}
+
 void PathfindingVisualizer::Clear() {
     m_image_data.clear();
     m_width = 0;
@@ -239,6 +407,10 @@ void PathfindingVisualizer::Clear() {
     m_max_y = 0.0f;
     m_scale_x = 1.0f;
     m_scale_y = 1.0f;
+    m_mask_data.clear();
+    m_mask_width = 0;
+    m_mask_height = 0;
+    m_mask_ready = false;
     // Note: texture_id is not cleared here - call RemoveTexture separately if needed
 }
 

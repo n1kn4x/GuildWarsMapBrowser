@@ -30,8 +30,9 @@ bool dat_compare_filter_result_changed = false;
 bool custom_file_info_changed = false;
 std::unordered_set<uint32_t> dat_compare_filter_result;
 
-void draw_ui(std::map<int, std::unique_ptr<DATManager>>& dat_managers, int& dat_manager_to_show, MapRenderer* map_renderer, PickingInfo picking_info,
-	std::vector<std::vector<std::string>>& csv_data, int& FPS_target, DX::StepTimer& timer, ExtractPanelInfo& extract_panel_info, bool& msaa_changed,
+void draw_ui(std::map<int, std::unique_ptr<DATManager>>& dat_managers, int& dat_manager_to_show, MapRenderer* map_renderer,
+	DX::DeviceResources* device_resources, PickingInfo picking_info, std::vector<std::vector<std::string>>& csv_data,
+	int& FPS_target, DX::StepTimer& timer, ExtractPanelInfo& extract_panel_info, bool& msaa_changed,
 	int& msaa_level_index, const std::vector<std::pair<int, int>>& msaa_levels, std::unordered_map<int, std::vector<int>>& hash_index)
 {
 	// Set DAT managers pointer for animation auto-loading (needs to be available in draw_dat_browser)
@@ -135,7 +136,7 @@ void draw_ui(std::map<int, std::unique_ptr<DATManager>>& dat_managers, int& dat_
 			// Always draw these panels when enabled - they show helpful messages when no content is loaded
 			draw_texture_panel(map_renderer);
 			draw_pathfinding_panel(map_renderer);
-			draw_route_planner_panel(map_renderer);
+			draw_route_planner_panel(map_renderer, device_resources);
 			draw_audio_controller_panel(selected_audio_stream_handle);
 			// Animation Controller panel removed - functionality moved to Model Viewer
 			draw_model_viewer_panel(map_renderer, dat_managers);
