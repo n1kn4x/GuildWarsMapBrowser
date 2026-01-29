@@ -14,7 +14,7 @@ extern FileType selected_file_type;
 extern int selected_map_file_index;
 
 namespace {
-    constexpr float kAggroRadius = 1500.0f;
+    constexpr float kSpellcastingRadius = 1085.0f;
 
     std::wstring OpenSaveFileDialog(const std::wstring& default_name, const std::wstring& extension) {
         OPENFILENAMEW ofn;
@@ -161,7 +161,7 @@ namespace {
 
         const float px_per_world_x = image_size.x / span_x;
         const float px_per_world_y = image_size.y / span_y;
-        const float aggro_radius_px = kAggroRadius * std::min(px_per_world_x, px_per_world_y);
+        const float spellcasting_radius_px = kSpellcastingRadius * std::min(px_per_world_x, px_per_world_y);
 
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
@@ -171,7 +171,7 @@ namespace {
             const ImVec2 center = ImVec2(image_min.x + px, image_min.y + py);
 
             if (show_coverage) {
-                draw_list->AddCircle(center, aggro_radius_px, IM_COL32(255, 180, 0, 120), 40, 2.0f);
+                draw_list->AddCircle(center, spellcasting_radius_px, IM_COL32(255, 180, 0, 120), 40, 2.0f);
             }
 
             const bool is_selected = static_cast<int>(i) == selected_index;
@@ -239,6 +239,7 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
     static std::vector<RouteWaypoint> waypoints;
     static bool show_lines = true;
     static bool show_coverage = true;
+    static float map_zoom = 1.0f;
     static bool click_to_add = true;
     static bool has_last_click = false;
     static RouteWaypoint last_click;
@@ -250,7 +251,8 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
     const bool prev_move_title_only = io.ConfigWindowsMoveFromTitleBarOnly;
     io.ConfigWindowsMoveFromTitleBarOnly = true;
 
-    if (ImGui::Begin("Route Planner", &GuiGlobalConstants::is_route_planner_panel_open, ImGuiWindowFlags_NoFocusOnAppearing)) {
+    if (ImGui::Begin("Route Planner", &GuiGlobalConstants::is_route_planner_panel_open,
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_HorizontalScrollbar)) {
         GuiGlobalConstants::ClampWindowToScreen();
 
         if (selected_file_type != FFNA_Type3) {
@@ -270,13 +272,21 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
 
         ImGui::Text("Waypoints: %zu", waypoints.size());
         ImGui::SameLine();
-        ImGui::Text("Aggro radius: %.0f", kAggroRadius);
+        ImGui::Text("Spellcasting range: %.0f", kSpellcastingRadius);
 
         ImGui::Separator();
 
         ImGui::Checkbox("Click on map to add waypoint", &click_to_add);
         ImGui::Checkbox("Show route lines", &show_lines);
-        ImGui::Checkbox("Show aggro coverage", &show_coverage);
+        ImGui::Checkbox("Show spellcasting coverage", &show_coverage);
+        ImGui::SliderFloat("Map zoom", &map_zoom, 0.25f, 4.0f, "%.2fx");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Use mouse wheel while hovering the map to zoom.");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reset zoom")) {
+            map_zoom = 1.0f;
+        }
         ImGui::TextWrapped("Clicks report map world coordinates (X/Y) based on the pathfinding data.");
         ImGui::Separator();
 
@@ -292,6 +302,7 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
                 float scale_y = (window_size.y - 120) / img_height;
                 float scale = std::min(scale_x, scale_y);
                 scale = std::max(0.1f, scale);
+                scale *= map_zoom;
 
                 ImVec2 scaled_size(img_width * scale, img_height * scale);
                 ImVec2 image_min = ImGui::GetCursorScreenPos();
@@ -301,6 +312,9 @@ void draw_route_planner_panel(MapRenderer* map_renderer) {
                 DrawWaypointOverlay(waypoints, *visualizer, image_min, scaled_size, show_lines, show_coverage, selected_waypoint);
 
                 if (ImGui::IsItemHovered()) {
+                    if (io.MouseWheel != 0.0f) {
+                        map_zoom = std::clamp(map_zoom + io.MouseWheel * 0.1f, 0.25f, 4.0f);
+                    }
                     const ImVec2 mouse_pos = ImGui::GetIO().MousePos;
                     const int hit_index = FindWaypointAtScreenPos(waypoints, *visualizer, image_min, scaled_size, mouse_pos, 10.0f);
 
